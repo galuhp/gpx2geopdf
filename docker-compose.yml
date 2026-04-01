@@ -1,0 +1,15 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - RAPIDAPI_KEY=${RAPIDAPI_KEY}
+      - MAPBOX_TOKEN=${MAPBOX_TOKEN}
+    volumes:
+      - geopdf_tmp:/tmp/gpx2geopdf
+      - ./backend:/app/backend
+    restart: unless-stopped
+
+volumes:
+  geopdf_tmp:
