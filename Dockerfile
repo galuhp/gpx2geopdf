@@ -1,13 +1,21 @@
-FROM python:3.12-slim
+# osgeo/gdal:ubuntu-full ships GDAL compiled with full driver support
+# including PDF + GEO_ENCODING=OGC required by Avenza Maps.
+# python:3.12-slim + apt gdal-bin does NOT include PDF driver — avoid it.
+FROM ghcr.io/osgeo/gdal:ubuntu-full-latest
 
-# Install GDAL and Node.js
+# Install Python 3.12, pip, curl, Node.js 20
 RUN apt-get update && apt-get install -y \
-    gdal-bin \
-    libgdal-dev \
+    python3 \
+    python3-pip \
+    python3-venv \
     curl \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Use venv to avoid PEP 668 "externally managed" error on Ubuntu
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
 WORKDIR /app
 
