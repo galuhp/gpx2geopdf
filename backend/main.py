@@ -83,8 +83,13 @@ async def fetch_tile(client, z, x, y, url_tpl, use_rapidapi=False, use_mapbox=Fa
         url = TILE_RAPIDAPI.format(z=z,x=x,y=y)
         headers = {"x-rapidapi-key": RAPIDAPI_KEY, "x-rapidapi-host": "retina-tiles.p.rapidapi.com"}
     elif use_mapbox:
+<<<<<<< HEAD
         url = f"https://api.mapbox.com/styles/v1/mapbox/outdoors-v12/tiles/512/{z}/{x}/{y}@2x?access_token={MAPBOX_TOKEN}"
         headers = {"User-Agent": "TrailMap/1.0"}
+=======
+        url = tile_url_template.replace('{z}', str(z)).replace('{x}', str(x)).replace('{y}', str(y))
+        headers = {"User-Agent": "TrailMap/1.0 (personal hiking tool)"}
+>>>>>>> 312f4a9756124c3b483f90d38c268764a9e4ac26
     else:
         sub = random.choice(['a','b','c'])
         url = url_tpl.replace('{s}',sub).replace('{z}',str(z)).replace('{x}',str(x)).replace('{y}',str(y))
@@ -107,10 +112,19 @@ async def stitch_tiles(bounds, zoom, job_id, url_tpl, use_rapidapi=False, use_ma
     for (tx,ty),tb in zip(coords,results):
         if tb:
             from io import BytesIO
+<<<<<<< HEAD
             ti = Image.open(BytesIO(tb)).convert("RGB")
             if ti.size != (tw,tw): ti = ti.resize((tw,tw),Image.LANCZOS)
             canvas.paste(ti,((tx-x0)*tw,(ty-y0)*tw))
     img_path = str(TEMP_DIR/f"{job_id}_map.png")
+=======
+            tile_img = Image.open(BytesIO(tile_bytes)).convert("RGB")
+            if tile_img.size != (tile_w, tile_w):
+                tile_img = tile_img.resize((tile_w, tile_w), Image.LANCZOS)
+            canvas.paste(tile_img, ((tx-x0)*tile_w, (ty-y0)*tile_w))
+
+    img_path = str(TEMP_DIR / f"{job_id}_map.png")
+>>>>>>> 312f4a9756124c3b483f90d38c268764a9e4ac26
     canvas.save(img_path)
     top_lat,left_lon = num2deg(x0,y0,zoom)
     bot_lat,right_lon = num2deg(x1+1,y1+1,zoom)
@@ -127,7 +141,41 @@ def hex_to_rgba(h, alpha=220):
 def to_px(lat, lon, left_lon, top_lat, right_lon, bot_lat, w, h):
     return int((lon-left_lon)/(right_lon-left_lon)*w), int((top_lat-lat)/(top_lat-bot_lat)*h)
 
+<<<<<<< HEAD
 def draw_tracks(img_path, tracks_data, left_lon, top_lat, right_lon, bot_lat, out_path):
+=======
+def resolve_basemap(basemap_id: str):
+    """Return (tile_url_template, use_rapidapi, use_mapbox)"""
+    if basemap_id == "osm" and RAPIDAPI_KEY:
+        return TILE_URL_RAPIDAPI, True, False
+    if basemap_id == "mapbox-outdoor":
+        if not MAPBOX_TOKEN:
+            raise HTTPException(500, "MAPBOX_TOKEN belum dikonfigurasi di server (.env)")
+        tile_url_tmpl = BASEMAP_URLS["mapbox-outdoor"][0].replace("{token}", MAPBOX_TOKEN)
+        logger.info(f"resolve_basemap: mapbox-outdoor, token prefix={MAPBOX_TOKEN[:8]}...")
+        return tile_url_tmpl, False, True
+    tile_url_tmpl, _ = BASEMAP_URLS.get(basemap_id, BASEMAP_URLS["osm"])
+    return tile_url_tmpl, False, False
+
+
+@app.get("/api/debug")
+async def debug_config():
+    return {
+        "RAPIDAPI_KEY_set": bool(RAPIDAPI_KEY),
+        "MAPBOX_TOKEN_set": bool(MAPBOX_TOKEN),
+        "MAPBOX_TOKEN_prefix": MAPBOX_TOKEN[:8] + "..." if MAPBOX_TOKEN else "(kosong)",
+    }
+
+
+@app.get("/api/config")
+async def get_config():
+    return {
+        "mapbox_token": MAPBOX_TOKEN if MAPBOX_TOKEN else None,
+    }
+
+
+def draw_track_overlay(img_path, points, left_lon, top_lat, right_lon, bot_lat, out_path, color_rgba=(255,60,60,220)):
+>>>>>>> 312f4a9756124c3b483f90d38c268764a9e4ac26
     from PIL import ImageDraw
     img = Image.open(img_path).convert("RGBA")
     w, h = img.size
@@ -459,8 +507,18 @@ def draw_annotations(img_path, annotations, left_lon, top_lat, right_lon, bot_la
 
 # ── GeoPDF helpers ───────────────────────────────────────────────────────────
 
+# ── FIX: Pipeline georeferencing yang benar untuk Avenza Maps ──
+# Pipeline lama (SALAH):
+#   PNG → gdal_translate (GTiff+GCP) → gdal_translate (PDF OGC)
+#   GCP yang di-embed di GTiff tidak otomatis menjadi proyeksi valid di PDF.
+#
+# Pipeline baru (BENAR):
+#   PNG → gdal_translate (GTiff+GCP) → gdalwarp (warp ke EPSG:4326) → gdal_translate (PDF OGC)
+#   gdalwarp mengubah GCP menjadi proyeksi nyata sehingga PDF dibaca sebagai peta referensi valid.
+
 def create_geopdf(img_path, left_lon, top_lat, right_lon, bot_lat, out_path):
     import subprocess
+<<<<<<< HEAD
     w,h = Image.open(img_path).size
     gcps = [f"-gcp 0 0 {left_lon} {top_lat}", f"-gcp {w} 0 {right_lon} {top_lat}",
             f"-gcp {w} {h} {right_lon} {bot_lat}", f"-gcp 0 {h} {left_lon} {bot_lat}"]
@@ -469,6 +527,39 @@ def create_geopdf(img_path, left_lon, top_lat, right_lon, bot_lat, out_path):
     subprocess.run(f"gdal_translate -of PDF -co GEO_ENCODING=OGC {georef} {out_path}", shell=True, check=True)
     try: os.remove(georef)
     except: pass
+=======
+    w, h = Image.open(img_path).size
+
+    gcps = [
+        f"-gcp 0 0 {left_lon} {top_lat}",
+        f"-gcp {w} 0 {right_lon} {top_lat}",
+        f"-gcp {w} {h} {right_lon} {bot_lat}",
+        f"-gcp 0 {h} {left_lon} {bot_lat}",
+    ]
+
+    georef_gcp = out_path.replace(".pdf", "_georef_gcp.tif")
+    georef_warped = out_path.replace(".pdf", "_georef_warped.tif")
+
+    # Step 1: embed GCP ke GTiff
+    subprocess.run(
+        f"gdal_translate -of GTiff {' '.join(gcps)} -a_srs EPSG:4326 {img_path} {georef_gcp}",
+        shell=True, check=True
+    )
+    # Step 2: warp GCP → proyeksi nyata EPSG:4326 (FIX UTAMA)
+    subprocess.run(
+        f"gdalwarp -t_srs EPSG:4326 -r lanczos {georef_gcp} {georef_warped}",
+        shell=True, check=True
+    )
+    # Step 3: ekspor ke PDF OGC GeoPDF
+    subprocess.run(
+        f"gdal_translate -of PDF -co GEO_ENCODING=OGC {georef_warped} {out_path}",
+        shell=True, check=True
+    )
+
+    for p in [georef_gcp, georef_warped]:
+        try: os.remove(p)
+        except: pass
+>>>>>>> 312f4a9756124c3b483f90d38c268764a9e4ac26
 
 def create_geopdf_fit(img_path, left_lon, top_lat, right_lon, bot_lat, pw_mm, ph_mm, out_path):
     import subprocess
@@ -607,6 +698,7 @@ async def generate_geopdf(
     try:
         img_path, left_lon, top_lat, right_lon, bot_lat = await build_map_image(files, track_colors, basemap_id, annotations, job_id, thunderforest_key)
     except Exception as e:
+<<<<<<< HEAD
         raise HTTPException(500, str(e))
     pdf = str(TEMP_DIR/f"{job_id}_geo.pdf")
     try: create_geopdf(img_path, left_lon, top_lat, right_lon, bot_lat, pdf)
@@ -614,6 +706,202 @@ async def generate_geopdf(
     try: os.remove(img_path)
     except: pass
     return FileResponse(pdf, media_type="application/pdf", filename="trail_avenza.pdf")
+=======
+        raise HTTPException(400, str(e))
+
+    import uuid
+    job_id = str(uuid.uuid4())[:8]
+    zoom = choose_zoom(gpx["min_lat"], gpx["max_lat"], gpx["min_lon"], gpx["max_lon"])
+
+    tile_url_template, use_rapidapi, use_mapbox = resolve_basemap(basemap_id)
+
+    try:
+        img_path, left_lon, top_lat, right_lon, bot_lat = await stitch_tiles(
+            gpx["min_lat"], gpx["max_lat"], gpx["min_lon"], gpx["max_lon"], zoom, job_id,
+            tile_url_template=tile_url_template, use_rapidapi=use_rapidapi, use_mapbox=use_mapbox
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Tile fetch error: {e}")
+
+    color_rgba = hex_to_rgba(track_color)
+    tracked_path = str(TEMP_DIR / f"{job_id}_tracked.png")
+    draw_track_overlay(img_path, gpx["points"], left_lon, top_lat, right_lon, bot_lat, tracked_path, color_rgba)
+
+    pdf_path = str(TEMP_DIR / f"{job_id}_output.pdf")
+    try:
+        create_geopdf(tracked_path, left_lon, top_lat, right_lon, bot_lat, pdf_path)
+    except Exception as e:
+        raise HTTPException(500, f"GeoPDF generation error: {e}")
+
+    for p in [img_path, tracked_path]:
+        try: os.remove(p)
+        except: pass
+
+    fname = Path(file.filename).stem if file.filename else "trail"
+    return FileResponse(pdf_path, media_type="application/pdf", filename=f"{fname}_avenza.pdf")
+
+
+# ── Paper sizes mm ──
+PAPER_SIZES_MM = {
+    "a4p": (210, 297), "a4l": (297, 210),
+    "a3p": (297, 420), "a3l": (420, 297),
+    "a5p": (148, 210), "ltr": (216, 279),
+}
+DPI = 150
+
+
+# ── NOTE: create_print_pdf adalah untuk cetak biasa (tanpa georeferencing) ──
+# Print PDF tidak bisa di-georeferensikan karena map di-resize dan di-paste
+# ke canvas kertas dengan margin/footer — koordinat pixel tidak linear terhadap geo.
+# Untuk output yang bisa dibuka di Avenza, gunakan /api/generate atau /api/generate-geofit.
+def create_print_pdf(img_path: str, pw_mm: float, ph_mm: float, out_path: str):
+    import subprocess
+    from PIL import ImageDraw
+    pw_px = int(pw_mm / 25.4 * DPI)
+    ph_px = int(ph_mm / 25.4 * DPI)
+    margin_px = int(10 / 25.4 * DPI)
+    footer_px = int(12 / 25.4 * DPI)
+
+    map_img = Image.open(img_path).convert("RGB")
+    mw, mh = map_img.size
+    avail_w = pw_px - 2 * margin_px
+    avail_h = ph_px - 2 * margin_px - footer_px
+    scale = min(avail_w / mw, avail_h / mh)
+    new_w, new_h = int(mw * scale), int(mh * scale)
+    map_resized = map_img.resize((new_w, new_h), Image.LANCZOS)
+
+    canvas = Image.new("RGB", (pw_px, ph_px), (255, 255, 255))
+    x_off = margin_px + (avail_w - new_w) // 2
+    y_off = margin_px
+    canvas.paste(map_resized, (x_off, y_off))
+
+    draw = ImageDraw.Draw(canvas)
+    draw.rectangle([x_off-1, y_off-1, x_off+new_w, y_off+new_h], outline=(180,180,180), width=1)
+    footer_y = y_off + new_h + int(4 / 25.4 * DPI)
+    draw.text((margin_px, footer_y), "Generated by TrailMap  •  © OpenStreetMap contributors", fill=(140,140,140))
+
+    tmp_png = out_path.replace(".pdf", "_canvas.png")
+    canvas.save(tmp_png, dpi=(DPI, DPI))
+    subprocess.run(f"gdal_translate -of PDF {tmp_png} {out_path}", shell=True, check=True)
+    os.remove(tmp_png)
+
+
+@app.post("/api/generate-print")
+async def generate_print_pdf(
+    file: UploadFile = File(...),
+    track_color: str = Form("#ff3c3c"),
+    basemap_id: str = Form("osm"),
+    paper_size: str = Form("a4p"),
+):
+    if not RAPIDAPI_KEY and basemap_id != "mapbox-outdoor":
+        raise HTTPException(500, "RAPIDAPI_KEY not configured")
+
+    content = await file.read()
+    try:
+        gpx = parse_gpx(content)
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+    import uuid
+    job_id = str(uuid.uuid4())[:8]
+    zoom = choose_zoom(gpx["min_lat"], gpx["max_lat"], gpx["min_lon"], gpx["max_lon"])
+
+    tile_url_template, use_rapidapi, use_mapbox = resolve_basemap(basemap_id)
+
+    try:
+        img_path, left_lon, top_lat, right_lon, bot_lat = await stitch_tiles(
+            gpx["min_lat"], gpx["max_lat"], gpx["min_lon"], gpx["max_lon"], zoom, job_id,
+            tile_url_template=tile_url_template, use_rapidapi=use_rapidapi, use_mapbox=use_mapbox
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Tile fetch error: {e}")
+
+    color_rgba = hex_to_rgba(track_color)
+    tracked_path = str(TEMP_DIR / f"{job_id}_tracked.png")
+    draw_track_overlay(img_path, gpx["points"], left_lon, top_lat, right_lon, bot_lat, tracked_path, color_rgba)
+
+    pw_mm, ph_mm = PAPER_SIZES_MM.get(paper_size, (210, 297))
+    pdf_path = str(TEMP_DIR / f"{job_id}_print.pdf")
+    try:
+        create_print_pdf(tracked_path, pw_mm, ph_mm, pdf_path)
+    except Exception as e:
+        raise HTTPException(500, f"Print PDF error: {e}")
+
+    for p in [img_path, tracked_path]:
+        try: os.remove(p)
+        except: pass
+
+    fname = Path(file.filename).stem if file.filename else "trail"
+    return FileResponse(pdf_path, media_type="application/pdf", filename=f"{fname}_{paper_size.upper()}.pdf")
+
+
+def create_geopdf_fit(img_path: str, left_lon: float, top_lat: float,
+                      right_lon: float, bot_lat: float,
+                      pw_mm: float, ph_mm: float, out_path: str):
+    """GeoPDF yang di-fit ke ukuran kertas, georeferencing tetap valid."""
+    import subprocess
+    from PIL import ImageDraw
+
+    DPI_GEO = 150
+    pw_px = int(pw_mm / 25.4 * DPI_GEO)
+    ph_px = int(ph_mm / 25.4 * DPI_GEO)
+    margin_px = int(8 / 25.4 * DPI_GEO)
+    footer_px = int(10 / 25.4 * DPI_GEO)
+
+    map_img = Image.open(img_path).convert("RGB")
+    mw, mh = map_img.size
+
+    avail_w = pw_px - 2 * margin_px
+    avail_h = ph_px - 2 * margin_px - footer_px
+    scale = min(avail_w / mw, avail_h / mh)
+    new_w, new_h = int(mw * scale), int(mh * scale)
+    map_resized = map_img.resize((new_w, new_h), Image.LANCZOS)
+
+    canvas = Image.new("RGB", (pw_px, ph_px), (255, 255, 255))
+    x_off = margin_px + (avail_w - new_w) // 2
+    y_off = margin_px
+    canvas.paste(map_resized, (x_off, y_off))
+
+    draw = ImageDraw.Draw(canvas)
+    draw.rectangle([x_off-1, y_off-1, x_off+new_w, y_off+new_h], outline=(180,180,180), width=1)
+    footer_y = y_off + new_h + int(3 / 25.4 * DPI_GEO)
+    draw.text((margin_px, footer_y), "Generated by TrailMap  •  © OpenStreetMap contributors", fill=(140,140,140))
+
+    tmp_png = out_path.replace(".pdf", "_geofit_canvas.png")
+    canvas.save(tmp_png, dpi=(DPI_GEO, DPI_GEO))
+
+    # Georeferencing: GCP pada posisi pixel map di canvas final
+    gcps = [
+        f"-gcp {x_off} {y_off} {left_lon} {top_lat}",
+        f"-gcp {x_off+new_w} {y_off} {right_lon} {top_lat}",
+        f"-gcp {x_off+new_w} {y_off+new_h} {right_lon} {bot_lat}",
+        f"-gcp {x_off} {y_off+new_h} {left_lon} {bot_lat}",
+    ]
+
+    georef_gcp = out_path.replace(".pdf", "_geofit_georef_gcp.tif")
+    georef_warped = out_path.replace(".pdf", "_geofit_georef_warped.tif")
+
+    # Step 1: embed GCP
+    subprocess.run(
+        f"gdal_translate -of GTiff {' '.join(gcps)} -a_srs EPSG:4326 {tmp_png} {georef_gcp}",
+        shell=True, check=True
+    )
+    # Step 2: warp GCP → proyeksi nyata (FIX UTAMA untuk Avenza)
+    subprocess.run(
+        f"gdalwarp -t_srs EPSG:4326 -r lanczos {georef_gcp} {georef_warped}",
+        shell=True, check=True
+    )
+    # Step 3: ekspor ke PDF OGC GeoPDF
+    subprocess.run(
+        f"gdal_translate -of PDF -co GEO_ENCODING=OGC {georef_warped} {out_path}",
+        shell=True, check=True
+    )
+
+    for p in [tmp_png, georef_gcp, georef_warped]:
+        try: os.remove(p)
+        except: pass
+
+>>>>>>> 312f4a9756124c3b483f90d38c268764a9e4ac26
 
 @app.post("/api/generate-geofit")
 async def generate_geofit(
@@ -659,7 +947,30 @@ async def generate_print(
     except: pass
     return FileResponse(pdf, media_type="application/pdf", filename=f"trail_{paper_size}.pdf")
 
+<<<<<<< HEAD
 # ── Static frontend ──────────────────────────────────────────────────────────
+=======
+    color_rgba = hex_to_rgba(track_color)
+    tracked_path = str(TEMP_DIR / f"{job_id}_tracked.png")
+    draw_track_overlay(img_path, gpx["points"], left_lon, top_lat, right_lon, bot_lat, tracked_path, color_rgba)
+
+    pw_mm, ph_mm = PAPER_SIZES_MM.get(paper_size, (210, 297))
+    pdf_path = str(TEMP_DIR / f"{job_id}_geofit.pdf")
+    try:
+        create_geopdf_fit(tracked_path, left_lon, top_lat, right_lon, bot_lat, pw_mm, ph_mm, pdf_path)
+    except Exception as e:
+        raise HTTPException(500, f"GeoPDF fit error: {e}")
+
+    for p in [img_path, tracked_path]:
+        try: os.remove(p)
+        except: pass
+
+    fname = Path(file.filename).stem if file.filename else "trail"
+    return FileResponse(pdf_path, media_type="application/pdf", filename=f"{fname}_avenza_{paper_size}.pdf")
+
+
+# ── Static files HARUS di-mount PALING AKHIR ──
+>>>>>>> 312f4a9756124c3b483f90d38c268764a9e4ac26
 frontend_dist = Path("/app/frontend/dist")
 if frontend_dist.exists():
     app.mount("/", StaticFiles(directory=str(frontend_dist), html=True), name="static")
