@@ -3,7 +3,7 @@
 # python:3.12-slim + apt gdal-bin does NOT include PDF driver — avoid it.
 FROM ghcr.io/osgeo/gdal:ubuntu-full-latest
 
-# Install Python 3.12, pip, curl, Node.js 20
+# Install Python 3.12, pip, Node.js 20
 RUN apt-get update && apt-get install -y \
     python3 \
     python3-pip \
