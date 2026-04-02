@@ -1,13 +1,16 @@
 FROM python:3.12-slim
 
-# Install GDAL and Node.js
+# Install GDAL, Node.js, and ImageMagick
 RUN apt-get update && apt-get install -y \
     gdal-bin \
     libgdal-dev \
     curl \
+    imagemagick \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+    && apt-get clean && rm -rf /var/lib/apt/lists/* \
+    && sed -i 's/<policy domain="coder" rights="none" pattern="SVG" \/>/<!-- SVG enabled -->/' /etc/ImageMagick-6/policy.xml 2>/dev/null || true \
+    && sed -i 's|rights="none" pattern="\*"|rights="read|write" pattern="*"|g' /etc/ImageMagick-6/policy.xml 2>/dev/null || true
 
 WORKDIR /app
 
@@ -22,6 +25,7 @@ RUN cd /app/frontend && npm run build
 COPY backend/requirements.txt /app/backend/
 RUN pip install --no-cache-dir -r /app/backend/requirements.txt
 
+# v7.3 — pure-PIL icon renderer, save/load project
 COPY backend/ /app/backend/
 
 EXPOSE 8000
