@@ -87,8 +87,6 @@ async def fetch_tile(client, z, x, y, tile_url_template, use_rapidapi=False, use
         url = TILE_URL_RAPIDAPI.format(z=z, x=x, y=y)
         headers = {"x-rapidapi-key": RAPIDAPI_KEY, "x-rapidapi-host": "retina-tiles.p.rapidapi.com"}
     elif use_mapbox:
-        # tile_url_template sudah di-resolve token-nya di resolve_basemap
-        # URL sudah pakai /tiles/512/{z}/{x}/{y}@2x → retina 512px HD
         url = tile_url_template.replace('{z}', str(z)).replace('{x}', str(x)).replace('{y}', str(y))
         headers = {"User-Agent": "TrailMap/1.0 (personal hiking tool)"}
     else:
@@ -123,7 +121,6 @@ async def stitch_tiles(min_lat, max_lat, min_lon, max_lon, zoom, job_id, tile_ur
         if tile_bytes:
             from io import BytesIO
             tile_img = Image.open(BytesIO(tile_bytes)).convert("RGB")
-            # Resize to tile_w if needed
             if tile_img.size != (tile_w, tile_w):
                 tile_img = tile_img.resize((tile_w, tile_w), Image.LANCZOS)
             canvas.paste(tile_img, ((tx-x0)*tile_w, (ty-y0)*tile_w))
@@ -151,7 +148,6 @@ def resolve_basemap(basemap_id: str):
     if basemap_id == "mapbox-outdoor":
         if not MAPBOX_TOKEN:
             raise HTTPException(500, "MAPBOX_TOKEN belum dikonfigurasi di server (.env)")
-        # Embed token sekarang; fetch_tile tinggal replace {z}/{x}/{y}
         tile_url_tmpl = BASEMAP_URLS["mapbox-outdoor"][0].replace("{token}", MAPBOX_TOKEN)
         logger.info(f"resolve_basemap: mapbox-outdoor, token prefix={MAPBOX_TOKEN[:8]}...")
         return tile_url_tmpl, False, True
@@ -161,7 +157,6 @@ def resolve_basemap(basemap_id: str):
 
 @app.get("/api/debug")
 async def debug_config():
-    """Cek konfigurasi env — jangan expose di production"""
     return {
         "RAPIDAPI_KEY_set": bool(RAPIDAPI_KEY),
         "MAPBOX_TOKEN_set": bool(MAPBOX_TOKEN),
@@ -171,7 +166,6 @@ async def debug_config():
 
 @app.get("/api/config")
 async def get_config():
-    """Return public config untuk frontend — token Mapbox untuk Leaflet preview"""
     return {
         "mapbox_token": MAPBOX_TOKEN if MAPBOX_TOKEN else None,
     }
@@ -199,19 +193,54 @@ def draw_track_overlay(img_path, points, left_lon, top_lat, right_lon, bot_lat, 
     Image.alpha_composite(img, overlay).convert("RGB").save(out_path)
 
 
-def create_geopdf(img_path, left_lon, top_lat, right_lon, bot_lat, out_path):
+def _run(cmd: str):
+    """Run shell command, log output on failure."""
     import subprocess
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    if result.returncode != 0:
+        logger.error(f"CMD FAILED: {cmd}\nSTDERR: {result.stderr}")
+        raise RuntimeError(result.stderr)
+    return result
+
+
+def create_geopdf(img_path: str, left_lon: float, top_lat: float,
+                  right_lon: float, bot_lat: float, out_path: str):
+    """
+    FIX: Pipeline yang benar untuk GeoPDF yang dikenali Avenza Maps:
+      1. gdal_translate  → GTiff dengan GCP (EPSG:4326)
+      2. gdalwarp        → GTiff terproyeksi EPSG:4326 (resampling bilinear)
+      3. gdal_translate  → PDF dengan GEO_ENCODING=OGC
+
+    Tanpa langkah gdalwarp, GCP hanya tersimpan sebagai metadata mentah
+    dan Avenza Maps menampilkan 'map not referenced'.
+    """
     w, h = Image.open(img_path).size
+
     gcps = [
         f"-gcp 0 0 {left_lon} {top_lat}",
         f"-gcp {w} 0 {right_lon} {top_lat}",
         f"-gcp {w} {h} {right_lon} {bot_lat}",
         f"-gcp 0 {h} {left_lon} {bot_lat}",
     ]
-    georef = out_path.replace(".pdf", "_georef.tif")
-    subprocess.run(f"gdal_translate -of GTiff {' '.join(gcps)} -a_srs EPSG:4326 {img_path} {georef}", shell=True, check=True)
-    subprocess.run(f"gdal_translate -of PDF -co GEO_ENCODING=OGC {georef} {out_path}", shell=True, check=True)
-    os.remove(georef)
+
+    gcp_tif  = out_path.replace(".pdf", "_gcp.tif")
+    warp_tif = out_path.replace(".pdf", "_warp.tif")
+
+    try:
+        # Step 1 — assign GCPs
+        _run(f"gdal_translate -of GTiff {' '.join(gcps)} -a_srs EPSG:4326 {img_path} {gcp_tif}")
+
+        # Step 2 — warp ke proyeksi nyata EPSG:4326 (ini yang hilang sebelumnya)
+        _run(f"gdalwarp -s_srs EPSG:4326 -t_srs EPSG:4326 -r bilinear "
+             f"-dstalpha {gcp_tif} {warp_tif}")
+
+        # Step 3 — ekspor ke PDF OGC
+        _run(f"gdal_translate -of PDF -co GEO_ENCODING=OGC "
+             f"-co AUTHOR=TrailMap -co PRODUCER=GDAL {warp_tif} {out_path}")
+    finally:
+        for p in [gcp_tif, warp_tif]:
+            try: os.remove(p)
+            except: pass
 
 
 @app.post("/api/preview")
@@ -233,7 +262,9 @@ async def preview_gpx(file: UploadFile = File(...)):
                            (math.sin((math.radians(points[i][1]-points[i-1][1]))/2))**2))
         ) for i in range(1, len(points))
     )
-    return JSONResponse({"min_lat": gpx["min_lat"], "max_lat": gpx["max_lat"], "min_lon": gpx["min_lon"], "max_lon": gpx["max_lon"], "point_count": len(points), "distance_km": round(total_dist, 2), "zoom": zoom})
+    return JSONResponse({"min_lat": gpx["min_lat"], "max_lat": gpx["max_lat"],
+                         "min_lon": gpx["min_lon"], "max_lon": gpx["max_lon"],
+                         "point_count": len(points), "distance_km": round(total_dist, 2), "zoom": zoom})
 
 
 @app.post("/api/generate")
@@ -292,8 +323,15 @@ PAPER_SIZES_MM = {
 DPI = 150
 
 
-def create_print_pdf(img_path: str, pw_mm: float, ph_mm: float, out_path: str):
-    import subprocess
+def create_print_pdf(img_path: str, pw_mm: float, ph_mm: float,
+                     left_lon: float, top_lat: float,
+                     right_lon: float, bot_lat: float,
+                     out_path: str):
+    """
+    FIX: create_print_pdf sekarang menerima koordinat geo dan menghasilkan
+    GeoPDF yang valid (bukan plain PDF) sehingga Avenza Maps bisa membacanya.
+    Pipeline sama dengan create_geopdf + margin/footer.
+    """
     from PIL import ImageDraw
     pw_px = int(pw_mm / 25.4 * DPI)
     ph_px = int(ph_mm / 25.4 * DPI)
@@ -316,12 +354,31 @@ def create_print_pdf(img_path: str, pw_mm: float, ph_mm: float, out_path: str):
     draw = ImageDraw.Draw(canvas)
     draw.rectangle([x_off-1, y_off-1, x_off+new_w, y_off+new_h], outline=(180,180,180), width=1)
     footer_y = y_off + new_h + int(4 / 25.4 * DPI)
-    draw.text((margin_px, footer_y), "Generated by TrailMap  •  © OpenStreetMap contributors", fill=(140,140,140))
+    draw.text((margin_px, footer_y), "Generated by TrailMap  \u2022  \u00a9 OpenStreetMap contributors", fill=(140,140,140))
 
     tmp_png = out_path.replace(".pdf", "_canvas.png")
     canvas.save(tmp_png, dpi=(DPI, DPI))
-    subprocess.run(f"gdal_translate -of PDF {tmp_png} {out_path}", shell=True, check=True)
-    os.remove(tmp_png)
+
+    # FIX: pakai pipeline georef yang sama dengan create_geopdf
+    # GCP dihitung dari posisi map area di atas canvas (x_off, y_off)
+    gcp_tif  = out_path.replace(".pdf", "_gcp.tif")
+    warp_tif = out_path.replace(".pdf", "_warp.tif")
+    gcps = [
+        f"-gcp {x_off} {y_off} {left_lon} {top_lat}",
+        f"-gcp {x_off+new_w} {y_off} {right_lon} {top_lat}",
+        f"-gcp {x_off+new_w} {y_off+new_h} {right_lon} {bot_lat}",
+        f"-gcp {x_off} {y_off+new_h} {left_lon} {bot_lat}",
+    ]
+    try:
+        _run(f"gdal_translate -of GTiff {' '.join(gcps)} -a_srs EPSG:4326 {tmp_png} {gcp_tif}")
+        _run(f"gdalwarp -s_srs EPSG:4326 -t_srs EPSG:4326 -r bilinear "
+             f"-dstalpha {gcp_tif} {warp_tif}")
+        _run(f"gdal_translate -of PDF -co GEO_ENCODING=OGC "
+             f"-co AUTHOR=TrailMap -co PRODUCER=GDAL {warp_tif} {out_path}")
+    finally:
+        for p in [tmp_png, gcp_tif, warp_tif]:
+            try: os.remove(p)
+            except: pass
 
 
 @app.post("/api/generate-print")
@@ -361,7 +418,9 @@ async def generate_print_pdf(
     pw_mm, ph_mm = PAPER_SIZES_MM.get(paper_size, (210, 297))
     pdf_path = str(TEMP_DIR / f"{job_id}_print.pdf")
     try:
-        create_print_pdf(tracked_path, pw_mm, ph_mm, pdf_path)
+        # FIX: teruskan koordinat geo ke create_print_pdf
+        create_print_pdf(tracked_path, pw_mm, ph_mm,
+                         left_lon, top_lat, right_lon, bot_lat, pdf_path)
     except Exception as e:
         raise HTTPException(500, f"Print PDF error: {e}")
 
@@ -376,8 +435,10 @@ async def generate_print_pdf(
 def create_geopdf_fit(img_path: str, left_lon: float, top_lat: float,
                       right_lon: float, bot_lat: float,
                       pw_mm: float, ph_mm: float, out_path: str):
-    """GeoPDF yang di-fit ke ukuran kertas, georeferencing tetap valid."""
-    import subprocess
+    """
+    FIX: Pipeline diperbaiki sama dengan create_geopdf — tambah gdalwarp
+    sebelum ekspor ke PDF OGC agar Avenza Maps mengenali georeferencing.
+    """
     from PIL import ImageDraw
 
     DPI_GEO = 150
@@ -403,26 +464,36 @@ def create_geopdf_fit(img_path: str, left_lon: float, top_lat: float,
     draw = ImageDraw.Draw(canvas)
     draw.rectangle([x_off-1, y_off-1, x_off+new_w, y_off+new_h], outline=(180,180,180), width=1)
     footer_y = y_off + new_h + int(3 / 25.4 * DPI_GEO)
-    draw.text((margin_px, footer_y), "Generated by TrailMap  •  © OpenStreetMap contributors", fill=(140,140,140))
+    draw.text((margin_px, footer_y), "Generated by TrailMap  \u2022  \u00a9 OpenStreetMap contributors", fill=(140,140,140))
 
     tmp_png = out_path.replace(".pdf", "_geofit_canvas.png")
     canvas.save(tmp_png, dpi=(DPI_GEO, DPI_GEO))
 
-    # Georeferencing: map area pixel coords on final canvas
-    # x_off, y_off = top-left of map; x_off+new_w, y_off+new_h = bottom-right
     gcps = [
         f"-gcp {x_off} {y_off} {left_lon} {top_lat}",
         f"-gcp {x_off+new_w} {y_off} {right_lon} {top_lat}",
         f"-gcp {x_off+new_w} {y_off+new_h} {right_lon} {bot_lat}",
         f"-gcp {x_off} {y_off+new_h} {left_lon} {bot_lat}",
     ]
-    georef = out_path.replace(".pdf", "_geofit_georef.tif")
-    subprocess.run(f"gdal_translate -of GTiff {' '.join(gcps)} -a_srs EPSG:4326 {tmp_png} {georef}", shell=True, check=True)
-    subprocess.run(f"gdal_translate -of PDF -co GEO_ENCODING=OGC {georef} {out_path}", shell=True, check=True)
 
-    for p in [tmp_png, georef]:
-        try: os.remove(p)
-        except: pass
+    gcp_tif  = out_path.replace(".pdf", "_geofit_gcp.tif")
+    warp_tif = out_path.replace(".pdf", "_geofit_warp.tif")
+
+    try:
+        # Step 1 — assign GCPs
+        _run(f"gdal_translate -of GTiff {' '.join(gcps)} -a_srs EPSG:4326 {tmp_png} {gcp_tif}")
+
+        # Step 2 — warp ke proyeksi nyata EPSG:4326
+        _run(f"gdalwarp -s_srs EPSG:4326 -t_srs EPSG:4326 -r bilinear "
+             f"-dstalpha {gcp_tif} {warp_tif}")
+
+        # Step 3 — ekspor ke PDF OGC
+        _run(f"gdal_translate -of PDF -co GEO_ENCODING=OGC "
+             f"-co AUTHOR=TrailMap -co PRODUCER=GDAL {warp_tif} {out_path}")
+    finally:
+        for p in [tmp_png, gcp_tif, warp_tif]:
+            try: os.remove(p)
+            except: pass
 
 
 @app.post("/api/generate-geofit")
@@ -473,9 +544,8 @@ async def generate_geofit(
     fname = Path(file.filename).stem if file.filename else "trail"
     return FileResponse(pdf_path, media_type="application/pdf", filename=f"{fname}_avenza_{paper_size}.pdf")
 
+
 # ── Static files HARUS di-mount PALING AKHIR ──
-# Jika di-mount lebih awal, StaticFiles("/") akan menangkap semua request
-# termasuk POST ke /api/*, sehingga muncul error "Method Not Allowed"
 frontend_dist = Path("/app/frontend/dist")
 if frontend_dist.exists():
     app.mount("/", StaticFiles(directory=str(frontend_dist), html=True), name="static")
