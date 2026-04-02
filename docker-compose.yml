@@ -9,7 +9,6 @@ services:
       - THUNDERFOREST_KEY=${THUNDERFOREST_KEY}
     volumes:
       - geopdf_tmp:/tmp/gpx2geopdf
-      - ./backend:/app/backend
     restart: unless-stopped
 
 volumes:
