@@ -6,6 +6,7 @@ services:
     environment:
       - RAPIDAPI_KEY=${RAPIDAPI_KEY}
       - MAPBOX_TOKEN=${MAPBOX_TOKEN}
+      - THUNDERFOREST_KEY=${THUNDERFOREST_KEY}
     volumes:
       - geopdf_tmp:/tmp/gpx2geopdf
       - ./backend:/app/backend
